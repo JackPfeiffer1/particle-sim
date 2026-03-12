@@ -1,18 +1,23 @@
 import pygame 
 import random
 from math import sqrt
+import colorsys
 
 WIDTH = 1280
 HEIGHT = 800
-TEAL = (20,150,140)
-BALL_RADIUS = 5
-GRID_SIZE = BALL_RADIUS * 2 + 1
+BG_COLOR = (10,50,40)
+BALL_RADIUS = 7
+TOTAL_BALLS = 2000
 GRAVITY = 0.0
-REPULSION_RADIUS = BALL_RADIUS * 2
-ATTRACTION_RADIUS = BALL_RADIUS * 4
-REPULSION_STRENGTH = 0.5
-ATTRACTION_STRENGTH = 0.1
-DAMPING = 0.99
+REPULSION_RADIUS = BALL_RADIUS * 2.75
+ATTRACTION_RADIUS = BALL_RADIUS * 7.5
+REPULSION_STRENGTH = 200
+ATTRACTION_STRENGTH = 15
+STARTING_VELOCITY = 50
+DAMPING = 0.97
+PHYSICS_STEPS = 2
+
+GRID_SIZE = ATTRACTION_RADIUS
 pygame.init()
 screen = pygame.display.set_mode((WIDTH,HEIGHT))
 clock = pygame.time.Clock()
@@ -20,15 +25,17 @@ clock = pygame.time.Clock()
 running = True
 
 class Ball:
-    def __init__(self, x,y):
+    def __init__(self, x,y, color):
         self.x = x
         self.y = y
-        self.vx = random.uniform(-250,250)
-        self.vy = random.uniform(-250,250)
+        self.vx = random.uniform(-STARTING_VELOCITY, STARTING_VELOCITY)
+        self.vy = random.uniform(-STARTING_VELOCITY, STARTING_VELOCITY)
         self.ax = 0
         self.ay = 0
         self.radius = BALL_RADIUS
-        self.color = (0,0,255)
+        
+        
+        self.color = color
         
     def update(self, dt):
         self.vy += GRAVITY  * dt# gravity
@@ -63,65 +70,16 @@ class Ball:
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
         
+def compute_force(dist):
+    if dist < REPULSION_RADIUS:
+        # Linearly goes from max repulsion at dist=0, to 0 at repulsion_radius
+        return -REPULSION_STRENGTH * (1 - dist / REPULSION_RADIUS)
+    elif dist < ATTRACTION_RADIUS:
+        # Linearly goes from 0 at repulsion_radius, peaks, fades back to 0
+        return ATTRACTION_STRENGTH * (1 - dist / ATTRACTION_RADIUS)
+    else:
+        return 0
 
-
-        
-def checkCollision(ball1,ball2):
-    distance_x = ball1.x - ball2.x
-    distance_y = ball1.y - ball2.y
-    return distance_x**2 + distance_y**2 < (ball1.radius + ball2.radius)**2
-
-def resolveOverlap(ball1, ball2):
-    distance_x = ball2.x - ball1.x
-    distance_y = ball2.y - ball1.y
-    
-    dist_sq = distance_x*distance_x + distance_y*distance_y
-    radius_sum = ball1.radius + ball2.radius
-
-    if dist_sq >= radius_sum*radius_sum:
-        return
-    
-    distance = sqrt(dist_sq)
-    
-    if distance == 0:
-        return
-    
-    overlap = ball1.radius + ball2.radius - distance
-    if overlap > 0:
-        normal_x = distance_x/distance
-        normal_y = distance_y/distance
-        
-        ball1.x -= normal_x * overlap/2
-        ball1.y -= normal_y * overlap/2
-
-        ball2.x += normal_x * overlap/2
-        ball2.y += normal_y * overlap/2
-     
-def resolveCollision(ball1, ball2):
-    distance_x = ball2.x - ball1.x
-    distance_y = ball2.y - ball1.y
-    distance = sqrt(distance_x*distance_x + distance_y*distance_y)
-    if distance == 0:
-        return  
-    normal_x = distance_x / distance
-    normal_y = distance_y / distance
-    
-    relative_vx = ball2.vx - ball1.vx
-    relative_vy = ball2.vy - ball1.vy
-    
-    velocity_along_normal = relative_vx * normal_x + relative_vy * normal_y
-    if velocity_along_normal > 0:
-        return
-
-    restitution = 0.9
-    impulse = -(1 + restitution) * velocity_along_normal / 2
-    
-    ball1.vx -= impulse * normal_x
-    ball1.vy -= impulse * normal_y
-
-    ball2.vx += impulse * normal_x
-    ball2.vy += impulse * normal_y
-        
 def createGrid():
     grid = {}
     for i, ball in enumerate(balls):
@@ -129,7 +87,7 @@ def createGrid():
         grid.setdefault(cell, []).append((i, ball))
         
     return grid
-def collisionPass(grid):
+def applyForces(grid):
     for i, ball in enumerate(balls):
         cell_x = int(ball.x // GRID_SIZE)
         cell_y = int(ball.y // GRID_SIZE)
@@ -142,42 +100,64 @@ def collisionPass(grid):
                 neighbor_cell = (cell_x + dx, cell_y + dy)
                 
                 for j, other in grid.get(neighbor_cell, []):
-                    if j <= i:
+                    if j <= i: # avoid double counting
                         continue
-
-                    if checkCollision(ball, other):
-                        resolveOverlap(ball, other)
-                        resolveCollision(ball, other)
+                    delta_x = other.x - ball.x
+                    delta_y = other.y - ball.y
+                    dist = sqrt(delta_x**2 + delta_y**2)
+                    
+                    if dist == 0:
+                        continue
+                        
+                    
+                    # --- Force magnitude (scalar) ---
+                    force = compute_force(dist)
+                    
+                    # --- Direction (unit vector toward `other`) ---
+                    nx = delta_x / dist
+                    ny = delta_y / dist
+                    
+                    # --- Apply equal and opposite (Newton's 3rd law) ---
+                    ball.ax  += force * nx    # positive force = pulled toward other
+                    ball.ay  += force * ny
+                    other.ax -= force * nx    # other gets pushed opposite direction
+                    other.ay -= force * ny
                     
 
 
     
 balls = []
-for _ in range(5000):
-        balls.append(Ball(random.randint(0,WIDTH),random.randint(0,HEIGHT)))   
+for i in range(TOTAL_BALLS):
+        hue = (i/TOTAL_BALLS) % 1.0
+        r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 1.0)
+        color = (int(r*255), int(g*255), int(b*255))
+        balls.append(Ball(random.randint(0,WIDTH),random.randint(0,HEIGHT), color))
 
 while running:
-    dt = clock.tick(60) / 1000
+    frame_dt = clock.tick(60) / 1000
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
             
-    screen.fill(TEAL)
+    screen.fill(BG_COLOR)
     
-    
-    for ball in balls:
-        ball.update(dt)
+    sub_dt = frame_dt / PHYSICS_STEPS
+    for _ in range(PHYSICS_STEPS):
+        grid = createGrid()
+        applyForces(grid)
         
-    grid = createGrid()
-    for _ in range(5):
-        collisionPass(grid)
+        for ball in balls:
+            ball.update(sub_dt)
+        
+
                 
     for ball in balls:
         ball.draw(screen)
         
+        
     pygame.display.set_caption(f"FPS: {clock.get_fps():.0f}")
     
     pygame.display.flip()
-    clock.tick(60)
+    
     
 pygame.quit()
